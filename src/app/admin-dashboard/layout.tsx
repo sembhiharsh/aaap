@@ -1,7 +1,7 @@
 import { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Admin Dashboard | BarcelonasTaxis",
+  title: "Viator Admin Dashboard",
   robots: { index: false, follow: false },
   icons: {
     icon: "/ADMIN FAVICON AND APP LOGO.png?v=2",
