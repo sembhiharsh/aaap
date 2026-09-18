@@ -1,7 +1,8 @@
 import Imap from 'imap';
 import { simpleParser } from 'mailparser';
 import { config, validateConfig } from './config';
-import { getAdminDb } from './src/lib/firebase-admin';
+import { getDb } from './src/lib/firebase-server';
+import { doc, getDoc, setDoc } from 'firebase/firestore/lite';
 import {
   normalizeTime,
   normalizeDate,
@@ -12,8 +13,8 @@ import {
 } from './src/lib/bookingFormatters';
 import { reconstructBooking, toFirestoreDoc, RawEmail, compareAndChooseBest } from './viator-parser-v2';
 
-// Initialize Firebase
-const db = getAdminDb();
+// Initialize Firebase Database via REST
+const db = getDb();
 
 // ============================================
 // TYPES
@@ -83,35 +84,35 @@ export function parseViatorEmail(body: string, subject?: string): ViatorBooking 
     receivedAt: new Date()
   };
   const state = reconstructBooking([rawEmail]);
-  const doc = toFirestoreDoc(state);
+  const firestoreDoc = toFirestoreDoc(state);
 
   return {
-    bookingRef: doc.bookingId,
-    customerName: doc.customerName,
-    phone: doc.phone,
-    email: doc.email || '',
+    bookingRef: firestoreDoc.bookingId,
+    customerName: firestoreDoc.customerName,
+    phone: firestoreDoc.phone,
+    email: firestoreDoc.email || '',
     tourName: '',
-    travelDate: doc.date,
-    pickupTime: doc.pickupTime,
-    pickupLocation: doc.pickup,
-    dropOff: doc.dropoff,
-    travelers: String(doc.passengers),
+    travelDate: firestoreDoc.date,
+    pickupTime: firestoreDoc.pickupTime,
+    pickupLocation: firestoreDoc.pickup,
+    dropOff: firestoreDoc.dropoff,
+    travelers: String(firestoreDoc.passengers),
     netRate: state.netRate?.value || '',
-    notes: doc.notes,
-    airline: doc.airline || '',
-    flight: doc.flight,
+    notes: firestoreDoc.notes,
+    airline: firestoreDoc.airline || '',
+    flight: firestoreDoc.flight,
     receivedAt: new Date().toISOString(),
-    flightArrivalTime: doc.flightArrivalTime,
-    flightDepartureTime: doc.flightDepartureTime,
-    cruiseShip: doc.cruiseShip,
-    disembarkTime: doc.disembarkTime,
-    flightArrival: doc.flightArrivalTime || '',
-    flightDeparture: doc.flightDepartureTime || '',
-    bookingType: doc.bookingType || 'standard',
-    pickupTimeSource: doc.pickupTimeSource || 'default',
+    flightArrivalTime: firestoreDoc.flightArrivalTime,
+    flightDepartureTime: firestoreDoc.flightDepartureTime,
+    cruiseShip: firestoreDoc.cruiseShip,
+    disembarkTime: firestoreDoc.disembarkTime,
+    flightArrival: firestoreDoc.flightArrivalTime || '',
+    flightDeparture: firestoreDoc.flightDepartureTime || '',
+    bookingType: firestoreDoc.bookingType || 'standard',
+    pickupTimeSource: firestoreDoc.pickupTimeSource || 'default',
     pickupTimeConfidence: state.requiresReview ? 'review_required' : 'high',
     parserVersion: '2.0.0',
-    tourGradeCode: doc.tourGradeCode
+    tourGradeCode: firestoreDoc.tourGradeCode
   };
 }
 
@@ -128,7 +129,7 @@ async function writeAuditLog(data: {
     const docId = data.messageId
       ? data.messageId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200)
       : `audit_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    await db.collection('emailAuditLog').doc(docId).set({ ...data, fetchedAt: new Date() }, { merge: true });
+    await setDoc(doc(db, 'emailAuditLog', docId), { ...data, fetchedAt: new Date() }, { merge: true });
   } catch (e) { console.error('[AuditLog] write failed:', e); }
 }
 
@@ -142,7 +143,7 @@ async function writeFailureLog(data: {
 }) {
   try {
     const docId = `${data.bookingId || 'unknown'}_${Date.now()}`;
-    await db.collection('viatorImportLogs').doc(docId).set({ ...data, loggedAt: new Date() });
+    await setDoc(doc(db, 'viatorImportLogs', docId), { ...data, loggedAt: new Date() });
   } catch (e) { console.error('[FailureLog] write failed:', e); }
 }
 
@@ -187,16 +188,16 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
     return;
   }
 
-  const bookingRef = db.collection('bookings').doc(bookingRefId);
+  const bookingRef = doc(db, 'bookings', bookingRefId);
 
   try {
     if (emailType === 'cancel') {
-      const snap = await bookingRef.get();
-      if (!snap.exists) {
+      const snap = await getDoc(bookingRef);
+      if (!snap.exists()) {
         console.warn(`[Viator Sync] Cancellation received for unknown booking ${bookingRefId}.`);
         await writeFailureLog({ bookingId: bookingRefId, subject, error: 'Cancellation received but booking not found in database', receivedAt, importStatus: 'CANCELLATION_FOR_UNKNOWN_BOOKING' });
       }
-      await bookingRef.set({
+      await setDoc(bookingRef, {
         status: 'cancelled',
         cancelledAt: new Date(),
         updatedAt: new Date(),
@@ -205,8 +206,8 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
       await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'success', mailbox });
 
     } else if (emailType === 'new') {
-      const snap = await bookingRef.get();
-      if (snap.exists) {
+      const snap = await getDoc(bookingRef);
+      if (snap.exists()) {
         const existingData = snap.data();
         if (existingData?.status === 'confirmed' || existingData?.status === 'cancelled') {
           console.log(`[Viator Sync] Skipping ${bookingRefId} — already exists as ${existingData.status}.`);
@@ -243,7 +244,7 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
         pickupTimeSource: booking.pickupTimeSource, pickupTimeConfidence: booking.pickupTimeConfidence,
         parserVersion: PARSER_VERSION, createdAt: new Date(), updatedAt: new Date(),
       };
-      await bookingRef.set(fieldsToSave);
+      await setDoc(bookingRef, fieldsToSave, { merge: true });
       console.log(`[Viator Sync] Created ${bookingRefId}${missingCritical ? ' (INCOMPLETE)' : ''}.`);
       await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'success', mailbox });
 
@@ -286,14 +287,14 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
       if (booking.travelers) fieldsToUpdate.passengers = parseInt(booking.travelers) || 1;
       if (booking.netRate) fieldsToUpdate.price = normalizePrice(booking.netRate);
 
-      const snap = await bookingRef.get();
-      if (snap.exists) {
+      const snap = await getDoc(bookingRef);
+      if (snap.exists()) {
         const existingData = snap.data();
         if (existingData?.driverId && existingData?.driverId !== 'unassigned') {
           fieldsToUpdate.internalNotes = (existingData.internalNotes ? existingData.internalNotes + '\n' : '') +
             `[VIATOR AMENDMENT ${new Date().toISOString()}] Booking details amended via Viator email.`;
         }
-        await bookingRef.set(fieldsToUpdate, { merge: true });
+        await setDoc(bookingRef, fieldsToUpdate, { merge: true });
         console.log(`[Viator Sync] Updated ${bookingRefId} from amendment.`);
       } else {
         fieldsToUpdate.bookingId = bookingRefId; fieldsToUpdate.source = 'viator-email';
@@ -303,7 +304,7 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
         fieldsToUpdate.pickup = fieldsToUpdate.pickup || 'Not Specified';
         fieldsToUpdate.dropoff = fieldsToUpdate.dropoff || 'Not Specified';
         fieldsToUpdate.parserVersion = PARSER_VERSION;
-        await bookingRef.set(fieldsToUpdate);
+        await setDoc(bookingRef, fieldsToUpdate, { merge: true });
         console.log(`[Viator Sync] Created ${bookingRefId} from amendment (was missing).`);
       }
       await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'success', mailbox });
@@ -327,15 +328,15 @@ function fetchFromFolder(imapCfg: any, folder: string, bookingsList: ViatorBooki
       imap.openBox(folder, false, (err: any) => {
         if (err) { console.warn(`[Viator Sync] Cannot open "${folder}": ${err.message}`); imap.end(); return resolve(); }
         
-        // Only fetch emails from the last 14 days
+        // Search recent emails with Viator or BR- in subject/from
         const sinceDate = new Date();
-        sinceDate.setDate(sinceDate.getDate() - 14);
+        sinceDate.setDate(sinceDate.getDate() - 30);
 
         imap.search([['SINCE', sinceDate], ['OR', ['FROM', 'viator'], ['SUBJECT', 'BR-']]], (searchErr: any, results: any) => {
           if (searchErr || !results?.length) { imap.end(); return resolve(); }
           
-          const targetUids = results.length > 30 ? results.slice(-30) : results;
-          console.log(`📬 [${folder}] ${results.length} recent Viator email(s), syncing latest ${targetUids.length}.`);
+          const targetUids = results.length > 50 ? results.slice(-50) : results;
+          console.log(`📬 [${folder}] ${results.length} Viator email(s) found, syncing latest ${targetUids.length}.`);
           
           const fetch = imap.fetch(targetUids, { bodies: '', markSeen: false });
           const promises: Promise<void>[] = [];
