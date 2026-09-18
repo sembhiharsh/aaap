@@ -1,34 +1,42 @@
 import './env';
 import Imap from 'imap';
 
-const user = process.env.ICLOUD_USER || 'taxi2bcn@icloud.com';
-const password = process.env.ICLOUD_APP_PASSWORD || process.env.ICLOUD_PASS || '';
+const user = process.env.GMAIL_USER || process.env.EMAIL_USER || '';
+const password = process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_APP_PASSWORD || '';
 
-console.log(`Connecting to iCloud IMAP for ${user}...`);
+if (!user || !password) {
+  console.error('? Missing GMAIL_USER / GMAIL_APP_PASSWORD in .env.local');
+  process.exit(1);
+}
+
+const isIcloud = user.toLowerCase().endsWith('@icloud.com') || user.toLowerCase().endsWith('@me.com');
+const host = isIcloud ? 'imap.mail.me.com' : 'imap.gmail.com';
+
+console.log(`Connecting to IMAP (${host}) for ${user}...`);
 
 const imap = new Imap({
   user,
   password,
-  host: 'imap.mail.me.com',
+  host,
   port: 993,
   tls: true,
   tlsOptions: { rejectUnauthorized: false }
 });
 
 imap.once('ready', () => {
-  console.log('✅ Successfully connected and authenticated to iCloud IMAP email server!');
+  console.log(`? Successfully connected and authenticated to ${host}!`);
   imap.openBox('INBOX', true, (err, box) => {
     if (err) {
       console.error('Error opening INBOX:', err);
     } else {
-      console.log(`✅ INBOX opened successfully. Total messages in inbox: ${box.messages.total}`);
+      console.log(`? INBOX opened successfully. Total messages: ${box.messages.total}`);
     }
     imap.end();
   });
 });
 
 imap.once('error', (err: any) => {
-  console.error('❌ IMAP Connection Error:', err.message);
+  console.error('? IMAP Connection Error:', err.message);
 });
 
 imap.once('end', () => {

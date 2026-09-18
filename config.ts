@@ -1,8 +1,8 @@
 export const config = {
   get email() {
     return {
-      user:     process.env.ICLOUD_USER || 'taxi2bcn@icloud.com',
-      password: process.env.ICLOUD_APP_PASSWORD || process.env.ICLOUD_PASS || '',
+      user:     process.env.GMAIL_USER || process.env.EMAIL_USER || '',
+      password: process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_APP_PASSWORD || '',
     };
   },
   get bokun() {

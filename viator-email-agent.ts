@@ -43,33 +43,35 @@ interface ViatorBooking {
   bookingType: string;
   pickupTimeSource: string;
   pickupTimeConfidence: 'high' | 'medium' | 'review_required';
-  parserVersion: string;
-  tourGradeCode: string;
+  parserVersion?: string;
+  tourGradeCode?: string;
 }
 
 const PARSER_VERSION = '2.0.0';
 
 // ============================================
-// IMAP CONFIGS
-// Step 2: Primary Gmail + optional direct iCloud
-// (set ICLOUD_USER + ICLOUD_APP_PASSWORD in .env.local)
+// IMAP CONFIG (Auto-detects Gmail or iCloud)
 // ============================================
-function getIcloudImapConfig() {
-  const user = process.env.ICLOUD_USER || 'taxi2bcn@icloud.com';
-  const password = process.env.ICLOUD_APP_PASSWORD || process.env.ICLOUD_PASS || '';
+function getImapConfig() {
+  const user = process.env.GMAIL_USER || process.env.EMAIL_USER || '';
+  const password = process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_APP_PASSWORD || '';
   if (!user || !password) return null;
+
+  const isIcloud = user.toLowerCase().endsWith('@icloud.com') || user.toLowerCase().endsWith('@me.com');
+  const host = isIcloud ? 'imap.mail.me.com' : 'imap.gmail.com';
+
   return {
     user,
     password,
-    host: 'imap.mail.me.com',
+    host,
     port: 993,
     tls: true,
     tlsOptions: { rejectUnauthorized: false }
   };
 }
 
-// Folders to search across iCloud
-const ICLOUD_FOLDERS = ['INBOX', 'Archive', 'Junk', 'Deleted Messages'];
+// Folders to search across
+const IMAP_FOLDERS = ['INBOX', '[Gmail]/All Mail', 'All Mail'];
 
 // ============================================
 // PARSE VIATOR EMAIL — EXACT FORMAT
@@ -98,15 +100,15 @@ export function parseViatorEmail(body: string, subject?: string): ViatorBooking 
     notes: doc.notes,
     airline: doc.airline || '',
     flight: doc.flight,
-    receivedAt: new Date().toLocaleString('es-ES'),
+    receivedAt: new Date().toISOString(),
     flightArrivalTime: doc.flightArrivalTime,
     flightDepartureTime: doc.flightDepartureTime,
     cruiseShip: doc.cruiseShip,
-    disembarkTime: doc.disembarkTime || '',
-    flightArrival: doc.flightArrivalTime,
-    flightDeparture: doc.flightDepartureTime,
-    bookingType: 'standard',
-    pickupTimeSource: state.pickupTime?.source || 'v2-parser',
+    disembarkTime: doc.disembarkTime,
+    flightArrival: doc.flightArrivalTime || '',
+    flightDeparture: doc.flightDepartureTime || '',
+    bookingType: doc.bookingType || 'standard',
+    pickupTimeSource: doc.pickupTimeSource || 'default',
     pickupTimeConfidence: state.requiresReview ? 'review_required' : 'high',
     parserVersion: '2.0.0',
     tourGradeCode: doc.tourGradeCode
@@ -114,8 +116,7 @@ export function parseViatorEmail(body: string, subject?: string): ViatorBooking 
 }
 
 // ============================================
-// AUDIT LOG HELPER (Step 6)
-// Logs every email before parsing — permanent audit trail
+// AUDIT LOG HELPER
 // ============================================
 async function writeAuditLog(data: {
   messageId: string; subject: string; from: string; receivedAt: Date;
@@ -132,7 +133,7 @@ async function writeAuditLog(data: {
 }
 
 // ============================================
-// FAILURE LOG HELPER (Step 4)
+// FAILURE LOG HELPER
 // ============================================
 async function writeFailureLog(data: {
   bookingId: string; subject: string; error: string; stack?: string;
@@ -179,59 +180,39 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
     if (bodyRefMatch) bookingRefId = bodyRefMatch[0].toUpperCase();
   }
 
-  // Step 6: Audit log BEFORE any processing
-  await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId || null, processingResult: 'pending', mailbox });
-
   if (!bookingRefId) {
-    console.warn(`[Viator Sync] No booking ref in: "${subject}"`);
-    await writeFailureLog({ bookingId: 'UNKNOWN', subject, error: 'Booking ref not found in subject or body', receivedAt, importStatus: 'MANUAL_REVIEW_REQUIRED' });
+    console.warn(`[Viator Sync] Could not extract BR- ref from email "${subject}".`);
+    await writeFailureLog({ bookingId: 'unknown', subject, error: 'Could not extract BR- reference from email', receivedAt, importStatus: 'FAILED' });
     await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: null, processingResult: 'no_ref', mailbox });
     return;
   }
 
+  const bookingRef = db.collection('bookings').doc(bookingRefId);
+
   try {
-    const bookingRef = db.collection('bookings').doc(bookingRefId);
-    const bookingSnap = await bookingRef.get();
-    const exists = bookingSnap.exists;
-    const existingData = exists ? (bookingSnap.data() || {}) : {};
-
     if (emailType === 'cancel') {
-      if (exists) {
-        const alreadyCancelled = existingData.status === 'CANCELLED' || existingData.status === 'cancelled';
-        const notes = existingData.internalNotes || '';
-        const alreadyHasNote = notes.includes('[CANCELLATION]');
-
-        if (!alreadyCancelled || !alreadyHasNote) {
-          const prefix = notes ? `${notes}\n` : '';
-          await bookingRef.set({
-            status: 'CANCELLED', paymentStatus: 'REFUNDED', updatedAt: new Date(),
-            internalNotes: `${prefix}[CANCELLATION] via Viator email ${new Date().toLocaleString()}`
-          }, { merge: true });
-          console.log(`[Viator Sync] Cancelled ${bookingRefId}`);
-        } else {
-          console.log(`[Viator Sync] ${bookingRefId} already marked cancelled. Skipping duplicate note.`);
-        }
-      } else {
-        // Step 5: cancellation for unknown booking — create shell
-        console.warn(`[Viator Sync] Cancellation for unknown booking ${bookingRefId}. Creating shell.`);
-        let shellName = 'Unknown Customer';
-        try { shellName = parseViatorEmail(body.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' '), subject).customerName || shellName; } catch {}
-        await bookingRef.set({
-          bookingId: bookingRefId, source: 'viator-email', status: 'CANCELLED', paymentStatus: 'REFUNDED',
-          customerName: shellName, pickup: 'Not Specified', dropoff: 'Not Specified',
-          date: '', time: '', vehicle: 'economy', price: 0, passengers: 1,
-          internalNotes: `[SHELL] Created from cancellation email — no prior booking existed. ${new Date().toLocaleString()}`,
-          parserVersion: PARSER_VERSION, createdAt: new Date(), updatedAt: new Date(),
-        });
-        await writeFailureLog({ bookingId: bookingRefId, subject, error: 'Cancellation for unknown booking — shell created', receivedAt, importStatus: 'CANCELLATION_FOR_UNKNOWN_BOOKING' });
+      const snap = await bookingRef.get();
+      if (!snap.exists) {
+        console.warn(`[Viator Sync] Cancellation received for unknown booking ${bookingRefId}.`);
+        await writeFailureLog({ bookingId: bookingRefId, subject, error: 'Cancellation received but booking not found in database', receivedAt, importStatus: 'CANCELLATION_FOR_UNKNOWN_BOOKING' });
       }
+      await bookingRef.set({
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        updatedAt: new Date(),
+      }, { merge: true });
+      console.log(`[Viator Sync] Cancelled ${bookingRefId}.`);
       await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'success', mailbox });
 
     } else if (emailType === 'new') {
-      if (exists) {
-        console.log(`[Viator Sync] ${bookingRefId} already exists. Skipping.`);
-        await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'skipped_exists', mailbox });
-        return;
+      const snap = await bookingRef.get();
+      if (snap.exists) {
+        const existingData = snap.data();
+        if (existingData?.status === 'confirmed' || existingData?.status === 'cancelled') {
+          console.log(`[Viator Sync] Skipping ${bookingRefId} — already exists as ${existingData.status}.`);
+          await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'skipped_exists', mailbox });
+          return;
+        }
       }
 
       const cleanedText = body.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ');
@@ -299,24 +280,18 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
       if (booking.disembarkTime && booking.disembarkTime.length <= 30) fieldsToUpdate.disembarkTime = booking.disembarkTime;
       if (booking.flightArrivalTime) fieldsToUpdate.flightArrivalTime = booking.flightArrivalTime;
       if (booking.flightDepartureTime) fieldsToUpdate.flightDepartureTime = booking.flightDepartureTime;
-      if (booking.notes) fieldsToUpdate.customerNotes = booking.notes;
-      if (booking.netRate) {
-        fieldsToUpdate.netRate = booking.netRate;
-        const p = normalizePrice(booking.netRate);
-        if (p > 0) fieldsToUpdate.price = p;
-      }
       if (booking.pickupTimeSource) fieldsToUpdate.pickupTimeSource = booking.pickupTimeSource;
       if (booking.pickupTimeConfidence) fieldsToUpdate.pickupTimeConfidence = booking.pickupTimeConfidence;
+      if (booking.notes) fieldsToUpdate.customerNotes = booking.notes;
+      if (booking.travelers) fieldsToUpdate.passengers = parseInt(booking.travelers) || 1;
+      if (booking.netRate) fieldsToUpdate.price = normalizePrice(booking.netRate);
 
-      if (exists) {
-        if (existingData.status === 'INCOMPLETE') {
-          const finalTime = fieldsToUpdate.time || existingData.time;
-          const finalPickup = fieldsToUpdate.pickup || existingData.pickup;
-          const finalDate = fieldsToUpdate.date || existingData.date;
-          if (finalTime && finalTime !== '00:00' && finalPickup && finalPickup !== 'Not Specified' && finalDate) {
-            fieldsToUpdate.status = 'confirmed';
-            fieldsToUpdate.pickupTimeConfidence = 'high';
-          }
+      const snap = await bookingRef.get();
+      if (snap.exists) {
+        const existingData = snap.data();
+        if (existingData?.driverId && existingData?.driverId !== 'unassigned') {
+          fieldsToUpdate.internalNotes = (existingData.internalNotes ? existingData.internalNotes + '\n' : '') +
+            `[VIATOR AMENDMENT ${new Date().toISOString()}] Booking details amended via Viator email.`;
         }
         await bookingRef.set(fieldsToUpdate, { merge: true });
         console.log(`[Viator Sync] Updated ${bookingRefId} from amendment.`);
@@ -335,7 +310,6 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
     }
 
   } catch (err: any) {
-    // Step 4: NEVER silently drop — always persist the failure
     console.error(`[Viator Sync] Error processing ${bookingRefId}:`, err);
     await writeFailureLog({ bookingId: bookingRefId, subject, error: err?.message || String(err), stack: err?.stack, receivedAt, importStatus: 'FAILED' });
     await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'failed', mailbox, error: err?.message });
@@ -353,14 +327,13 @@ function fetchFromFolder(imapCfg: any, folder: string, bookingsList: ViatorBooki
       imap.openBox(folder, false, (err: any) => {
         if (err) { console.warn(`[Viator Sync] Cannot open "${folder}": ${err.message}`); imap.end(); return resolve(); }
         
-        // Only fetch emails from the last 14 days to prevent massive RAM exhaustion
+        // Only fetch emails from the last 14 days
         const sinceDate = new Date();
         sinceDate.setDate(sinceDate.getDate() - 14);
 
         imap.search([['SINCE', sinceDate], ['OR', ['FROM', 'viator'], ['SUBJECT', 'BR-']]], (searchErr: any, results: any) => {
           if (searchErr || !results?.length) { imap.end(); return resolve(); }
           
-          // Process most recent 30 emails per folder
           const targetUids = results.length > 30 ? results.slice(-30) : results;
           console.log(`📬 [${folder}] ${results.length} recent Viator email(s), syncing latest ${targetUids.length}.`);
           
@@ -372,7 +345,7 @@ function fetchFromFolder(imapCfg: any, folder: string, bookingsList: ViatorBooki
                 simpleParser(stream, async (parseErr: any, parsed: any) => {
                   if (parseErr) { resolveMsg(); return; }
                   const mid = parsed.messageId || '';
-                  if (mid && seenIds.has(mid)) { resolveMsg(); return; } // dedup across folders
+                  if (mid && seenIds.has(mid)) { resolveMsg(); return; }
                   if (mid) seenIds.add(mid);
                   await processMessage(parsed, bookingsList, folder);
                   resolveMsg();
@@ -391,19 +364,18 @@ function fetchFromFolder(imapCfg: any, folder: string, bookingsList: ViatorBooki
 }
 
 // ============================================
-// UNIFIED SYNC FUNCTION (Steps 2+3)
+// UNIFIED SYNC FUNCTION
 // ============================================
 export async function fetchNewBookings(): Promise<ViatorBooking[]> {
   validateConfig();
   const bookingsList: ViatorBooking[] = [];
-  const seenIds = new Set<string>(); // dedup across folders
+  const seenIds = new Set<string>();
 
-  // iCloud direct sync (all folders: INBOX, Archive, Junk, Deleted Messages)
-  const icloudConfig = getIcloudImapConfig();
-  if (icloudConfig) {
-    for (const folder of ICLOUD_FOLDERS) {
-      try { await fetchFromFolder(icloudConfig, folder, bookingsList, seenIds); }
-      catch (e: any) { console.error(`[Viator Sync] iCloud ${folder} failed:`, e.message); }
+  const imapConfig = getImapConfig();
+  if (imapConfig) {
+    for (const folder of IMAP_FOLDERS) {
+      try { await fetchFromFolder(imapConfig, folder, bookingsList, seenIds); }
+      catch (e: any) { console.error(`[Viator Sync] ${folder} failed:`, e.message); }
     }
   }
 
@@ -412,7 +384,7 @@ export async function fetchNewBookings(): Promise<ViatorBooking[]> {
 }
 
 export function fetchCancellations(): Promise<void> {
-  return Promise.resolve(); // merged into fetchNewBookings
+  return Promise.resolve();
 }
 
 export type { ViatorBooking };
