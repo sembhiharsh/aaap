@@ -719,8 +719,8 @@ function BookingTableRow({ b, setDetailBooking, updateStatus, zoomedBookingId, s
    MAIN COMPONENT
 ═══════════════════════════════════════════════ */
 export default function AdminDashboard() {
-  const [authed, setAuthed] = useState(false);
-  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [authed, setAuthed] = useState(true);
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [password, setPassword] = useState("");
   const [section, setSection] = useState<string>("reservations");
 
@@ -911,55 +911,6 @@ export default function AdminDashboard() {
     }
   };
 
-  /* ── Login Screen ── */
-  if (isAuthLoading) {
-    return (
-      <div className="min-h-screen bg-[#F8F9FA] flex flex-col items-center justify-center p-4 font-sans">
-        <Loader2 className="w-10 h-10 animate-spin text-[#8B4513] mb-4" />
-        <p className="text-gray-500 font-medium">Verifying authentication...</p>
-      </div>
-    );
-  }
-
-  if (!authed) {
-    return (
-      <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center p-4 font-sans">
-        <form onSubmit={handleLogin} className="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 max-w-sm w-full">
-          <img src="/ADMIN FAVICON AND APP LOGO.png?v=2" alt="Admin Logo" className="h-20 object-contain mx-auto mb-4" />
-          <h1 className="text-2xl font-black text-center text-gray-900 mb-1">
-            Viator Admin Portal
-          </h1>
-          <p className="text-center text-[#6B7280] text-xs mb-6 font-medium">
-            Enter Admin Password to access
-          </p>
-
-          {loginError && (
-            <div className="bg-red-50 text-red-600 border border-red-200 text-xs font-semibold p-3 rounded-lg mb-4 text-center">
-              {loginError}
-            </div>
-          )}
-
-          <div className="space-y-4 mb-6">
-            <div>
-              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">Admin Password</label>
-              <input
-                type="password"
-                placeholder="Password"
-                className="w-full px-4 py-3 bg-[#F8F9FA] border border-gray-200 rounded-xl text-[15px] font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8B4513]/20 focus:border-[#8B4513] transition-all"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                required
-              />
-            </div>
-          </div>
-
-          <button type="submit" className="w-full py-3.5 bg-[#8B4513] text-white rounded-xl font-bold text-[15px] hover:bg-[#8B4513]/90 transition-colors shadow-sm">
-            Access Admin Dashboard
-          </button>
-        </form>
-      </div>
-    );
-  }
 
   /* ── Render active section content ── */
   const renderSection = () => {
