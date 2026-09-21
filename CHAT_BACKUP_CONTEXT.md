@@ -21,13 +21,22 @@
 
 ---
 
-## 3. Email Sync Integration (MSOBAN Email)
-The application connects directly to Gmail via IMAP to automatically parse Viator reservation emails into Firestore:
+## 3. Database: SUPABASE (Active)
+The database has been fully migrated from Firebase to **Supabase**:
+- **Supabase Project URL**: `https://acuqqbovxalflwcpffds.supabase.co`
+- **SQL Schema Script**: `supabase_schema.sql` (Creates `bookings`, `drivers`, `invoices`, `email_audit_logs`, and `viator_import_logs` with RLS policies and Realtime enabled).
+- **Client SDK**: `@supabase/supabase-js` with realtime subscriptions.
+- **Server SDK**: `src/lib/supabase-admin.ts` with service role privileges.
+- **Data Layer Adapter**: `src/lib/db.ts` & `src/lib/firebase.ts` (Drop-in Supabase compatibility adapter).
+
+---
+
+## 4. Email Sync Integration (MSOBAN Email)
+The application connects directly to Gmail via IMAP to automatically parse Viator reservation emails and write them to Supabase:
 
 - **Connected Email**: `alisoban1990@gmail.com`
 - **App Password**: `lbhq osnk izll vpkv`
 - **IMAP Host**: `imap.gmail.com:993` (SSL/TLS)
-- **Status**: Tested and verified — successfully synced Viator bookings (e.g. `BR-1448000749`, `BR-1447161793`, `BR-1441882857`, `BR-1439052305`).
 - **Worker Endpoint**: `/api/email-worker` runs automated background polling every 2 minutes.
 - **Sync Scripts**:
   - `test-email-connection.ts`: Tests IMAP authentication and reports inbox message counts.
@@ -35,34 +44,16 @@ The application connects directly to Gmail via IMAP to automatically parse Viato
 
 ---
 
-## 4. Firebase Database Status: DISCONNECTED
-As requested, the previous Firebase project (`easyride-8978d`) has been **completely disconnected**.
-
-### How to Connect Your New Firebase Project:
-Update `.env.local` (and `.env`) with your new Firebase project credentials:
-
-```env
-# Firebase Configuration
-NEXT_PUBLIC_FIREBASE_API_KEY=your_new_api_key
-NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your_new_project_id.firebaseapp.com
-NEXT_PUBLIC_FIREBASE_PROJECT_ID=your_new_project_id
-NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your_new_project_id.firebasestorage.app
-NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_messaging_sender_id
-NEXT_PUBLIC_FIREBASE_APP_ID=your_app_id
-```
-
----
-
 ## 5. Directory Structure & Key Files
 - `src/app/page.tsx` & `src/app/admin/page.tsx`: Pure Viator Admin Portal login page.
 - `src/app/admin-dashboard/page.tsx`: Full administrative control panel (reservations, driver assignment, payouts, filters, invoices, search).
-- `src/app/invoice/[invoiceId]/page.tsx`: Printable invoice template.
+- `src/app/invoice/[invoiceId]/page.tsx`: Printable invoice template powered by Supabase.
 - `src/app/api/email-worker/route.ts`: Background synchronization worker endpoint.
 - `src/app/api/admin/bookings/[bookingId]/`: Admin delete and update endpoints.
-- `src/lib/firebase-server.ts`: REST-based Firestore database client.
-- `src/lib/bookingFormatters.ts`: Date, time, price, name, and status formatting utilities.
-- `viator-email-agent.ts`: IMAP Viator email fetcher, message validator, and parser.
-- `viator-parser-v2.ts`: Regex parser extracting lead traveler, pickup/dropoff, dates, times, flight numbers, cruise ship, passenger count, and net rate from Viator email bodies.
+- `src/lib/supabase.ts` & `src/lib/supabase-admin.ts`: Supabase client & server singletons.
+- `src/lib/db.ts`: CamelCase <-> SnakeCase database schema mapper.
+- `viator-email-agent.ts`: IMAP Viator email fetcher and parser writing to Supabase.
+- `supabase_schema.sql`: Full PostgreSQL DDL schema with indexes and RLS policies.
 - `public/ADMIN FAVICON AND APP LOGO.png`: Dedicated Admin app logo.
 
 ---
