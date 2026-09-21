@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getAdminDb } from '@/lib/firebase-admin';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 
 export async function DELETE(
   request: Request,
@@ -11,21 +11,19 @@ export async function DELETE(
       return NextResponse.json({ error: 'Missing booking ID' }, { status: 400 });
     }
 
-    const db = getAdminDb();
-    const bookingRef = db.collection('bookings').doc(bookingId);
-    
-    // Check if the booking exists
-    const snap = await bookingRef.get();
-    if (!snap.exists) {
-      return NextResponse.json({ error: 'Booking not found' }, { status: 404 });
-    }
+    const { error } = await supabaseAdmin
+      .from('bookings')
+      .delete()
+      .or(`id.eq.${bookingId},booking_id.eq.${bookingId}`);
 
-    // Permanently delete
-    await bookingRef.delete();
+    if (error) {
+      console.error('Supabase delete booking error:', error.message);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
-    console.error('Error permanently deleting booking:', error);
+    console.error('Error deleting booking:', error);
     return NextResponse.json(
       { error: 'Internal server error', details: error.message },
       { status: 500 }

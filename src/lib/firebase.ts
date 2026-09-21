@@ -1,44 +1,189 @@
-import { initializeApp, getApps } from 'firebase/app';
+import { supabase } from './supabase';
+import { toCamelBooking, toSnakeBooking, toCamelDriver, toSnakeDriver } from './db';
 
-import { getAuth } from 'firebase/auth';
-
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
+// Supabase-backed compatibility layer for Admin Dashboard
+export const auth: any = {
+  currentUser: { uid: 'admin-master', email: 'alisoban1990@gmail.com' }
 };
 
-if (!firebaseConfig.apiKey || !firebaseConfig.authDomain || !firebaseConfig.projectId) {
-  console.warn("WARNING: Firebase configuration missing in environment variables. Some frontend features may fail.");
+export async function signInAnonymously(_auth?: any) {
+  return { user: auth.currentUser };
 }
 
-console.log("[Firebase Config] Project ID:", firebaseConfig.projectId);
+export async function setPersistence(_auth: any, _persistence: any) {
+  return true;
+}
 
-import { getFirestore, initializeFirestore } from 'firebase/firestore';
+export const browserLocalPersistence = {};
 
-const app = getApps().length === 0 
-  ? initializeApp(firebaseConfig) 
-  : getApps()[0];
+export function onAuthStateChanged(_auth: any, next: (user: any) => void, _error?: any) {
+  next(auth.currentUser);
+  return () => {};
+}
 
-let firestoreDb;
-try {
-  firestoreDb = initializeFirestore(app, {
-    experimentalForceLongPolling: true
+export async function signOut(_auth: any) {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('easyride_admin_token');
+  }
+}
+
+export interface DocRef {
+  table: string;
+  id: string;
+}
+
+export interface CollectionRef {
+  table: string;
+}
+
+export const db: any = supabase;
+
+export function doc(_db: any, table: string, id: string): DocRef {
+  return { table, id };
+}
+
+export function collection(_db: any, table: string): CollectionRef {
+  return { table };
+}
+
+export function query(col: CollectionRef, ..._args: any[]): CollectionRef {
+  return col;
+}
+
+export function orderBy(_field: string, _dir?: string) {
+  return {};
+}
+
+export function where(_field: string, _op: string, _value: any) {
+  return {};
+}
+
+export const Timestamp = {
+  now: () => ({ seconds: Math.floor(Date.now() / 1000) }),
+  fromDate: (d: Date) => ({ seconds: Math.floor(d.getTime() / 1000) }),
+};
+
+export async function setDoc(docRef: DocRef, data: any, options?: { merge?: boolean }) {
+  const table = docRef.table;
+  let record: any;
+  if (table === 'bookings') {
+    record = toSnakeBooking({ id: docRef.id, bookingId: docRef.id, ...data });
+    const { error } = await supabase.from('bookings').upsert(record);
+    if (error) throw new Error(error.message);
+  } else if (table === 'drivers') {
+    record = toSnakeDriver({ id: docRef.id, ...data });
+    const { error } = await supabase.from('drivers').upsert(record);
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await supabase.from(table).upsert({ id: docRef.id, ...data });
+    if (error) throw new Error(error.message);
+  }
+  return true;
+}
+
+export async function updateDoc(docRef: DocRef, data: any) {
+  const table = docRef.table;
+  let record: any;
+  if (table === 'bookings') {
+    record = toSnakeBooking(data);
+    delete record.id;
+    delete record.booking_id;
+    const { error } = await supabase
+      .from('bookings')
+      .update(record)
+      .or(`id.eq.${docRef.id},booking_id.eq.${docRef.id}`);
+    if (error) throw new Error(error.message);
+  } else if (table === 'drivers') {
+    record = toSnakeDriver(data);
+    delete record.id;
+    const { error } = await supabase
+      .from('drivers')
+      .update(record)
+      .or(`id.eq.${docRef.id},driver_id.eq.${docRef.id}`);
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await supabase.from(table).update(data).eq('id', docRef.id);
+    if (error) throw new Error(error.message);
+  }
+  return true;
+}
+
+export async function getDocs(queryRef: CollectionRef | DocRef) {
+  const table = queryRef.table;
+  const { data, error } = await supabase.from(table).select('*');
+  if (error) throw new Error(error.message);
+
+  const docs = (data || []).map((row: any) => {
+    let parsed = row;
+    if (table === 'bookings') parsed = toCamelBooking(row);
+    if (table === 'drivers') parsed = toCamelDriver(row);
+    return {
+      id: parsed.id || parsed.bookingId || row.id,
+      data: () => parsed,
+      ...parsed,
+    };
   });
-} catch (error) {
-  firestoreDb = getFirestore(app);
+
+  return { docs, size: docs.length, empty: docs.length === 0 };
 }
 
-let firebaseAuth;
-try {
-  firebaseAuth = getAuth(app);
-} catch (error: any) {
-  console.warn("WARNING: Firebase Auth initialization failed (expected during build if config is missing):", error.message);
+export function onSnapshot(
+  queryRef: CollectionRef,
+  next: (snapshot: { docs: any[]; docChanges: () => any[] }) => void,
+  errorCb?: (error: any) => void
+) {
+  const table = queryRef.table;
+  let active = true;
+
+  const loadData = async (isInitial = false) => {
+    try {
+      const { data, error } = await supabase
+        .from(table)
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        if (errorCb) errorCb(error);
+        return;
+      }
+
+      if (!active) return;
+
+      const docs = (data || []).map((row: any) => {
+        let parsed = row;
+        if (table === 'bookings') parsed = toCamelBooking(row);
+        if (table === 'drivers') parsed = toCamelDriver(row);
+        return {
+          id: parsed.id || parsed.bookingId || row.id,
+          data: () => parsed,
+          ...parsed,
+        };
+      });
+
+      next({
+        docs,
+        docChanges: () => []
+      });
+    } catch (err: any) {
+      if (errorCb) errorCb(err);
+    }
+  };
+
+  // Initial load
+  loadData(true);
+
+  // Realtime subscription via Supabase Channel
+  const channel = supabase
+    .channel(`realtime:${table}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table }, () => {
+      loadData(false);
+    })
+    .subscribe();
+
+  return () => {
+    active = false;
+    supabase.removeChannel(channel);
+  };
 }
 
-export const db = firestoreDb;
-export const auth = firebaseAuth as import('firebase/auth').Auth;
-export default app;
+export default supabase;

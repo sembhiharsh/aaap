@@ -1,8 +1,7 @@
 import Imap from 'imap';
 import { simpleParser } from 'mailparser';
 import { config, validateConfig } from './config';
-import { getDb } from './src/lib/firebase-server';
-import { doc, getDoc, setDoc } from 'firebase/firestore/lite';
+import { supabaseAdmin } from './src/lib/supabase-admin';
 import {
   normalizeTime,
   normalizeDate,
@@ -12,9 +11,6 @@ import {
   cleanLocation
 } from './src/lib/bookingFormatters';
 import { reconstructBooking, toFirestoreDoc, RawEmail, compareAndChooseBest } from './viator-parser-v2';
-
-// Initialize Firebase Database via REST
-const db = getDb();
 
 // ============================================
 // TYPES
@@ -72,7 +68,7 @@ function getImapConfig() {
 }
 
 // Folders to search across
-const IMAP_FOLDERS = ['INBOX', '[Gmail]/All Mail', 'All Mail'];
+const IMAP_FOLDERS = ['INBOX', '[Gmail]/All Mail'];
 
 // ============================================
 // PARSE VIATOR EMAIL — EXACT FORMAT
@@ -84,35 +80,35 @@ export function parseViatorEmail(body: string, subject?: string): ViatorBooking 
     receivedAt: new Date()
   };
   const state = reconstructBooking([rawEmail]);
-  const firestoreDoc = toFirestoreDoc(state);
+  const doc = toFirestoreDoc(state);
 
   return {
-    bookingRef: firestoreDoc.bookingId,
-    customerName: firestoreDoc.customerName,
-    phone: firestoreDoc.phone,
-    email: firestoreDoc.email || '',
+    bookingRef: doc.bookingId,
+    customerName: doc.customerName,
+    phone: doc.phone,
+    email: doc.email || '',
     tourName: '',
-    travelDate: firestoreDoc.date,
-    pickupTime: firestoreDoc.pickupTime,
-    pickupLocation: firestoreDoc.pickup,
-    dropOff: firestoreDoc.dropoff,
-    travelers: String(firestoreDoc.passengers),
+    travelDate: doc.date,
+    pickupTime: doc.pickupTime,
+    pickupLocation: doc.pickup,
+    dropOff: doc.dropoff,
+    travelers: String(doc.passengers),
     netRate: state.netRate?.value || '',
-    notes: firestoreDoc.notes,
-    airline: firestoreDoc.airline || '',
-    flight: firestoreDoc.flight,
+    notes: doc.notes,
+    airline: doc.airline || '',
+    flight: doc.flight,
     receivedAt: new Date().toISOString(),
-    flightArrivalTime: firestoreDoc.flightArrivalTime,
-    flightDepartureTime: firestoreDoc.flightDepartureTime,
-    cruiseShip: firestoreDoc.cruiseShip,
-    disembarkTime: firestoreDoc.disembarkTime,
-    flightArrival: firestoreDoc.flightArrivalTime || '',
-    flightDeparture: firestoreDoc.flightDepartureTime || '',
-    bookingType: firestoreDoc.bookingType || 'standard',
-    pickupTimeSource: firestoreDoc.pickupTimeSource || 'default',
+    flightArrivalTime: doc.flightArrivalTime,
+    flightDepartureTime: doc.flightDepartureTime,
+    cruiseShip: doc.cruiseShip,
+    disembarkTime: doc.disembarkTime,
+    flightArrival: doc.flightArrivalTime || '',
+    flightDeparture: doc.flightDepartureTime || '',
+    bookingType: doc.bookingType || 'standard',
+    pickupTimeSource: doc.pickupTimeSource || 'default',
     pickupTimeConfidence: state.requiresReview ? 'review_required' : 'high',
     parserVersion: '2.0.0',
-    tourGradeCode: firestoreDoc.tourGradeCode
+    tourGradeCode: doc.tourGradeCode
   };
 }
 
@@ -126,11 +122,20 @@ async function writeAuditLog(data: {
   mailbox: string; error?: string;
 }) {
   try {
-    const docId = data.messageId
-      ? data.messageId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200)
-      : `audit_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    await setDoc(doc(db, 'emailAuditLog', docId), { ...data, fetchedAt: new Date() }, { merge: true });
-  } catch (e) { console.error('[AuditLog] write failed:', e); }
+    await supabaseAdmin.from('email_audit_logs').insert({
+      message_id: data.messageId,
+      subject: data.subject,
+      from_address: data.from,
+      received_at: data.receivedAt.toISOString(),
+      booking_ref_extracted: data.bookingRefExtracted,
+      processing_result: data.processingResult,
+      mailbox: data.mailbox,
+      error: data.error,
+      fetched_at: new Date().toISOString(),
+    });
+  } catch (e: any) {
+    console.error('[AuditLog] write failed:', e?.message || e);
+  }
 }
 
 // ============================================
@@ -142,9 +147,18 @@ async function writeFailureLog(data: {
   importStatus: 'FAILED' | 'CANCELLATION_FOR_UNKNOWN_BOOKING' | 'MANUAL_REVIEW_REQUIRED';
 }) {
   try {
-    const docId = `${data.bookingId || 'unknown'}_${Date.now()}`;
-    await setDoc(doc(db, 'viatorImportLogs', docId), { ...data, loggedAt: new Date() });
-  } catch (e) { console.error('[FailureLog] write failed:', e); }
+    await supabaseAdmin.from('viator_import_logs').insert({
+      booking_id: data.bookingId,
+      subject: data.subject,
+      error: data.error,
+      stack: data.stack,
+      received_at: data.receivedAt.toISOString(),
+      import_status: data.importStatus,
+      logged_at: new Date().toISOString(),
+    });
+  } catch (e: any) {
+    console.error('[FailureLog] write failed:', e?.message || e);
+  }
 }
 
 // ============================================
@@ -188,32 +202,28 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
     return;
   }
 
-  const bookingRef = doc(db, 'bookings', bookingRefId);
-
   try {
     if (emailType === 'cancel') {
-      const snap = await getDoc(bookingRef);
-      if (!snap.exists()) {
+      const { data: existing } = await supabaseAdmin.from('bookings').select('id, status').eq('booking_id', bookingRefId).single();
+      if (!existing) {
         console.warn(`[Viator Sync] Cancellation received for unknown booking ${bookingRefId}.`);
         await writeFailureLog({ bookingId: bookingRefId, subject, error: 'Cancellation received but booking not found in database', receivedAt, importStatus: 'CANCELLATION_FOR_UNKNOWN_BOOKING' });
       }
-      await setDoc(bookingRef, {
+      await supabaseAdmin.from('bookings').upsert({
+        id: bookingRefId,
+        booking_id: bookingRefId,
         status: 'cancelled',
-        cancelledAt: new Date(),
-        updatedAt: new Date(),
-      }, { merge: true });
+        updated_at: new Date().toISOString(),
+      });
       console.log(`[Viator Sync] Cancelled ${bookingRefId}.`);
       await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'success', mailbox });
 
     } else if (emailType === 'new') {
-      const snap = await getDoc(bookingRef);
-      if (snap.exists()) {
-        const existingData = snap.data();
-        if (existingData?.status === 'confirmed' || existingData?.status === 'cancelled') {
-          console.log(`[Viator Sync] Skipping ${bookingRefId} — already exists as ${existingData.status}.`);
-          await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'skipped_exists', mailbox });
-          return;
-        }
+      const { data: existing } = await supabaseAdmin.from('bookings').select('id, status').eq('booking_id', bookingRefId).single();
+      if (existing && (existing.status === 'confirmed' || existing.status === 'cancelled')) {
+        console.log(`[Viator Sync] Skipping ${bookingRefId} — already exists as ${existing.status}.`);
+        await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'skipped_exists', mailbox });
+        return;
       }
 
       const cleanedText = body.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ');
@@ -227,48 +237,64 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
         await writeFailureLog({ bookingId: bookingRefId, subject, error: 'Missing critical fields: name, date, time, or pickup', receivedAt, importStatus: 'MANUAL_REVIEW_REQUIRED' });
       }
 
-      const fieldsToSave: any = {
-        bookingId: bookingRefId, source: 'viator-email',
-        customerName: booking.customerName || 'Lead Traveler',
-        email: booking.email || '', phone: booking.phone || '',
-        pickup: booking.pickupLocation || 'Not Specified', dropoff: booking.dropOff || 'Not Specified',
-        date: normalizeDate(booking.travelDate) || '', time: normalizeTime(booking.pickupTime) || '',
-        vehicle: 'economy', airline: booking.airline || '', flight: booking.flight || '',
-        cruiseShip: booking.cruiseShip || '', price: normalizePrice(booking.netRate) || 0,
+      const record: any = {
+        id: bookingRefId,
+        booking_id: bookingRefId,
+        source: 'viator-email',
+        customer_name: booking.customerName || 'Lead Traveler',
+        email: booking.email || '',
+        phone: booking.phone || '',
+        pickup: booking.pickupLocation || 'Not Specified',
+        dropoff: booking.dropOff || 'Not Specified',
+        date: normalizeDate(booking.travelDate) || '',
+        time: normalizeTime(booking.pickupTime) || '',
+        vehicle: 'economy',
+        airline: booking.airline || '',
+        flight: booking.flight || '',
+        cruise_ship: booking.cruiseShip || '',
+        price: normalizePrice(booking.netRate) || 0,
         passengers: parseInt(booking.travelers) || 1,
         status: missingCritical ? 'INCOMPLETE' : 'confirmed',
-        paymentStatus: 'PAID', customerNotes: booking.notes || '',
-        bookingType: booking.bookingType || 'standard',
-        disembarkTime: booking.disembarkTime || '', flightArrivalTime: booking.flightArrivalTime || '',
-        flightDepartureTime: booking.flightDepartureTime || '',
-        pickupTimeSource: booking.pickupTimeSource, pickupTimeConfidence: booking.pickupTimeConfidence,
-        parserVersion: PARSER_VERSION, createdAt: new Date(), updatedAt: new Date(),
+        payment_status: 'PAID',
+        customer_notes: booking.notes || '',
+        booking_type: booking.bookingType || 'standard',
+        disembark_time: booking.disembarkTime || '',
+        flight_arrival_time: booking.flightArrivalTime || '',
+        flight_departure_time: booking.flightDepartureTime || '',
+        pickup_time_source: booking.pickupTimeSource || 'email',
+        pickup_time_confidence: booking.pickupTimeConfidence || 'high',
+        parser_version: PARSER_VERSION,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       };
-      await setDoc(bookingRef, fieldsToSave, { merge: true });
-      console.log(`[Viator Sync] Created ${bookingRefId}${missingCritical ? ' (INCOMPLETE)' : ''}.`);
+
+      const { error: upsertErr } = await supabaseAdmin.from('bookings').upsert(record);
+      if (upsertErr) {
+        console.error(`[Viator Sync] Supabase write error for ${bookingRefId}:`, upsertErr.message);
+      } else {
+        console.log(`[Viator Sync] Created ${bookingRefId}${missingCritical ? ' (INCOMPLETE)' : ''} in Supabase.`);
+      }
       await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'success', mailbox });
 
     } else if (emailType === 'modify') {
       const cleanedText = body.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ');
       const booking = parseViatorEmail(cleanedText, subject);
-      
+
       const fieldsToUpdate: any = {
-        updatedAt: new Date(),
+        id: bookingRefId,
+        booking_id: bookingRefId,
+        updated_at: new Date().toISOString(),
       };
 
-      if (booking.customerName && booking.customerName.toLowerCase() !== 'lead traveler' && booking.customerName.trim() !== '') {
-        fieldsToUpdate.customerName = booking.customerName;
+      if (booking.customerName && booking.customerName.toLowerCase() !== 'lead traveler') {
+        fieldsToUpdate.customer_name = booking.customerName;
       }
-      if (booking.phone && booking.phone.trim() !== '') {
-        fieldsToUpdate.phone = booking.phone;
-      }
-      if (booking.email && booking.email.trim() !== '') {
-        fieldsToUpdate.email = booking.email;
-      }
-      if (booking.pickupLocation && booking.pickupLocation !== 'Not Specified' && booking.pickupLocation.trim() !== '') {
+      if (booking.phone) fieldsToUpdate.phone = booking.phone;
+      if (booking.email) fieldsToUpdate.email = booking.email;
+      if (booking.pickupLocation && booking.pickupLocation !== 'Not Specified') {
         fieldsToUpdate.pickup = booking.pickupLocation;
       }
-      if (booking.dropOff && booking.dropOff !== 'Not Specified' && booking.dropOff.trim() !== '') {
+      if (booking.dropOff && booking.dropOff !== 'Not Specified') {
         fieldsToUpdate.dropoff = booking.dropOff;
       }
       const normDate = normalizeDate(booking.travelDate);
@@ -277,35 +303,31 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
       if (normTime) fieldsToUpdate.time = normTime;
       if (booking.airline) fieldsToUpdate.airline = booking.airline;
       if (booking.flight) fieldsToUpdate.flight = booking.flight;
-      if (booking.cruiseShip) fieldsToUpdate.cruiseShip = booking.cruiseShip;
-      if (booking.disembarkTime && booking.disembarkTime.length <= 30) fieldsToUpdate.disembarkTime = booking.disembarkTime;
-      if (booking.flightArrivalTime) fieldsToUpdate.flightArrivalTime = booking.flightArrivalTime;
-      if (booking.flightDepartureTime) fieldsToUpdate.flightDepartureTime = booking.flightDepartureTime;
-      if (booking.pickupTimeSource) fieldsToUpdate.pickupTimeSource = booking.pickupTimeSource;
-      if (booking.pickupTimeConfidence) fieldsToUpdate.pickupTimeConfidence = booking.pickupTimeConfidence;
-      if (booking.notes) fieldsToUpdate.customerNotes = booking.notes;
+      if (booking.cruiseShip) fieldsToUpdate.cruise_ship = booking.cruiseShip;
+      if (booking.disembarkTime) fieldsToUpdate.disembark_time = booking.disembarkTime;
+      if (booking.flightArrivalTime) fieldsToUpdate.flight_arrival_time = booking.flightArrivalTime;
+      if (booking.flightDepartureTime) fieldsToUpdate.flight_departure_time = booking.flightDepartureTime;
+      if (booking.notes) fieldsToUpdate.customer_notes = booking.notes;
       if (booking.travelers) fieldsToUpdate.passengers = parseInt(booking.travelers) || 1;
       if (booking.netRate) fieldsToUpdate.price = normalizePrice(booking.netRate);
 
-      const snap = await getDoc(bookingRef);
-      if (snap.exists()) {
-        const existingData = snap.data();
-        if (existingData?.driverId && existingData?.driverId !== 'unassigned') {
-          fieldsToUpdate.internalNotes = (existingData.internalNotes ? existingData.internalNotes + '\n' : '') +
-            `[VIATOR AMENDMENT ${new Date().toISOString()}] Booking details amended via Viator email.`;
+      const { data: existing } = await supabaseAdmin.from('bookings').select('id, driver_id, internal_notes').eq('booking_id', bookingRefId).single();
+      if (existing) {
+        if (existing.driver_id && existing.driver_id !== 'unassigned') {
+          fieldsToUpdate.internal_notes = (existing.internal_notes ? existing.internal_notes + '\n' : '') +
+            `[VIATOR AMENDMENT ${new Date().toISOString()}] Details amended via Viator email.`;
         }
-        await setDoc(bookingRef, fieldsToUpdate, { merge: true });
-        console.log(`[Viator Sync] Updated ${bookingRefId} from amendment.`);
+        await supabaseAdmin.from('bookings').update(fieldsToUpdate).eq('booking_id', bookingRefId);
+        console.log(`[Viator Sync] Updated ${bookingRefId} in Supabase.`);
       } else {
-        fieldsToUpdate.bookingId = bookingRefId; fieldsToUpdate.source = 'viator-email';
-        fieldsToUpdate.status = 'confirmed'; fieldsToUpdate.paymentStatus = 'PAID';
-        fieldsToUpdate.vehicle = 'economy'; fieldsToUpdate.createdAt = new Date();
-        fieldsToUpdate.customerName = fieldsToUpdate.customerName || 'Lead Traveler';
-        fieldsToUpdate.pickup = fieldsToUpdate.pickup || 'Not Specified';
-        fieldsToUpdate.dropoff = fieldsToUpdate.dropoff || 'Not Specified';
-        fieldsToUpdate.parserVersion = PARSER_VERSION;
-        await setDoc(bookingRef, fieldsToUpdate, { merge: true });
-        console.log(`[Viator Sync] Created ${bookingRefId} from amendment (was missing).`);
+        fieldsToUpdate.source = 'viator-email';
+        fieldsToUpdate.status = 'confirmed';
+        fieldsToUpdate.payment_status = 'PAID';
+        fieldsToUpdate.vehicle = 'economy';
+        fieldsToUpdate.created_at = new Date().toISOString();
+        fieldsToUpdate.parser_version = PARSER_VERSION;
+        await supabaseAdmin.from('bookings').upsert(fieldsToUpdate);
+        console.log(`[Viator Sync] Created ${bookingRefId} from amendment in Supabase.`);
       }
       await writeAuditLog({ messageId, subject, from: fromAddress, receivedAt, bookingRefExtracted: bookingRefId, processingResult: 'success', mailbox });
     }

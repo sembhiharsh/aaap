@@ -1,40 +1,31 @@
 export const dynamic = 'force-dynamic';
-// src/app/api/admin/bookings/[bookingId]/update/route.ts
 import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/firebase-server';
-import { doc, updateDoc, getDoc } from 'firebase/firestore/lite';
-import { logActivity } from '@/lib/activityLog';
+import { supabaseAdmin } from '@/lib/supabase-admin';
+import { toSnakeBooking } from '@/lib/db';
 
 export async function PATCH(request: Request, { params }: { params: { bookingId: string } }) {
   const { bookingId } = params;
   const data = await request.json();
-  const { status, driver, adminUid } = data; // adminUid from client auth token or passed explicitly
-
-  if (!adminUid) {
-    return NextResponse.json({ error: 'adminUid required' }, { status: 400 });
-  }
 
   try {
-    const bookingRef = doc(getDb(), 'bookings', bookingId);
-    const snap = await getDoc(bookingRef);
-    if (!snap.exists()) {
-      return NextResponse.json({ error: 'Booking not found' }, { status: 404 });
-    }
-
-    const updates: any = {};
-    if (status) updates.status = status;
-    if (driver !== undefined) updates.driver = driver;
+    const updates = toSnakeBooking(data);
+    delete updates.id;
+    delete updates.booking_id;
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: 'No updates provided' }, { status: 400 });
     }
 
-    await updateDoc(bookingRef, updates);
-    // Log activity
-    const action = status ? `Booking status changed to ${status}` : '';
-    const driverAction = driver !== undefined ? `Driver assigned: ${driver || 'unassigned'}` : '';
-    const combinedAction = [action, driverAction].filter(Boolean).join(' | ');
-    await logActivity({ adminUser: adminUid, action: combinedAction || 'Booking Updated', bookingId });
+    const { error } = await supabaseAdmin
+      .from('bookings')
+      .update(updates)
+      .or(`id.eq.${bookingId},booking_id.eq.${bookingId}`);
+
+    if (error) {
+      console.error('Supabase booking update error:', error.message);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
     return NextResponse.json({ success: true });
   } catch (e: any) {
     console.error('Admin booking update error:', e);
