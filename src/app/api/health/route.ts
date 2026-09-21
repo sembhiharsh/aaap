@@ -26,13 +26,43 @@ function startSelfPing() {
 export async function GET() {
   startSelfPing();
 
-  return NextResponse.json({
-    status: 'online',
-    healthy: true,
-    service: 'Viator Admin Portal',
-    timestamp: new Date().toISOString(),
-    uptimeSeconds: Math.floor(process.uptime()),
-    serverTime: new Date().toLocaleString(),
+  return NextResponse.json(
+    {
+      status: 'online',
+      healthy: true,
+      service: 'Viator Admin Portal',
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      serverTime: new Date().toLocaleString(),
+    },
+    {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Access-Control-Allow-Origin': '*',
+      },
+    }
+  );
+}
+
+export async function HEAD() {
+  startSelfPing();
+  return new Response(null, {
+    status: 200,
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Access-Control-Allow-Origin': '*',
+    },
   });
 }
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+    },
+  });
+}
+
 
