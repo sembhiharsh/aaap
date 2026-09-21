@@ -257,7 +257,6 @@ async function processMessage(parsed: any, bookingsList: ViatorBooking[], mailbo
         status: missingCritical ? 'INCOMPLETE' : 'confirmed',
         payment_status: 'PAID',
         customer_notes: booking.notes || '',
-        booking_type: booking.bookingType || 'standard',
         disembark_time: booking.disembarkTime || '',
         flight_arrival_time: booking.flightArrivalTime || '',
         flight_departure_time: booking.flightDepartureTime || '',
