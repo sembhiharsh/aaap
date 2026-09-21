@@ -349,17 +349,13 @@ function fetchFromFolder(imapCfg: any, folder: string, bookingsList: ViatorBooki
       imap.openBox(folder, false, (err: any) => {
         if (err) { console.warn(`[Viator Sync] Cannot open "${folder}": ${err.message}`); imap.end(); return resolve(); }
         
-        // Search recent emails with Viator or BR- in subject/from
-        const sinceDate = new Date();
-        sinceDate.setDate(sinceDate.getDate() - 30);
-
-        imap.search([['SINCE', sinceDate], ['OR', ['FROM', 'viator'], ['SUBJECT', 'BR-']]], (searchErr: any, results: any) => {
+        // Search all emails with Viator or BR- in subject/from across all time
+        imap.search([['OR', ['FROM', 'viator'], ['SUBJECT', 'BR-']]], (searchErr: any, results: any) => {
           if (searchErr || !results?.length) { imap.end(); return resolve(); }
           
-          const targetUids = results.length > 50 ? results.slice(-50) : results;
-          console.log(`📬 [${folder}] ${results.length} Viator email(s) found, syncing latest ${targetUids.length}.`);
+          console.log(`📬 [${folder}] ${results.length} total Viator email(s) found, syncing all.`);
           
-          const fetch = imap.fetch(targetUids, { bodies: '', markSeen: false });
+          const fetch = imap.fetch(results, { bodies: '', markSeen: false });
           const promises: Promise<void>[] = [];
           fetch.on('message', (msg: any) => {
             const p = new Promise<void>((resolveMsg) => {
