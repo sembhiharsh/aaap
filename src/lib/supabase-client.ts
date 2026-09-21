@@ -197,9 +197,25 @@ export function onSnapshot(
     }
   };
 
+  // Initial load
   loadData(true);
 
-  const channel = supabase
+  // Background fallback interval (every 15s) so data stays 100% in sync even if WebSocket drops
+  const pollTimer = setInterval(() => {
+    if (active) loadData();
+  }, 15000);
+
+  // Re-sync on window focus / visibility restore
+  const handleFocus = () => {
+    if (active) loadData();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('visibilitychange', handleFocus);
+    window.addEventListener('online', handleFocus);
+  }
+
+  let channel = supabase
     .channel(`realtime_${table}_${Date.now()}`)
     .on(
       'postgres_changes',
@@ -212,6 +228,12 @@ export function onSnapshot(
 
   return () => {
     active = false;
+    clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('visibilitychange', handleFocus);
+      window.removeEventListener('online', handleFocus);
+    }
     supabase.removeChannel(channel);
   };
 }

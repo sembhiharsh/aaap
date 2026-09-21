@@ -6,7 +6,7 @@
         "clean": "rm -rf .next",
         "dev": "node -e \"require('fs').writeFileSync('./public/version.json', JSON.stringify({version: Date.now()}))\" && next dev -p 3001",
         "build": "node -e \"require('fs').writeFileSync('./public/version.json', JSON.stringify({version: Date.now()}))\" && next build",
-        "start": "next start"
+        "start": "node keep-alive.js"
     },
     "dependencies": {
         "@capacitor/core": "^8.4.2",
