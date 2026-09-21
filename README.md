@@ -1,14 +1,12 @@
-# EasyRide Admin App (Standalone)
+# Viator Admin App (Standalone)
 
-Dedicated standalone Admin Dashboard and Dispatch Portal for Barcelona Taxis.
+Dedicated standalone Admin Dashboard and Dispatch Portal for Viator Bookings.
 
 ## Features
-- **Unified Portal & Admin Login**: Direct entry on `/` or `/admin` with persistent authentication.
-- **Full Admin Dashboard**: Comprehensive booking management (New, Confirmed, Completed, Cancelled, Deleted, Range, Accounts, Invoicing, Drivers, Totals) at `/admin-dashboard`.
-- **Driver Portal**: Dispatch viewing for assigned drivers at `/driver-dashboard`.
-- **Invoice Generator**: Automated invoice generation and printing at `/invoice/[invoiceId]`.
-- **Background Email Worker**: Integrated sync and booking parser triggers.
-- **Capacitor Android Support**: Pre-configured `capacitor.config.json` for building a dedicated mobile Admin app.
+- **Pure Admin Portal**: Direct entry on `/` or `/admin` with master admin access.
+- **Full Admin Dashboard**: Real-time booking management (Viator Bookings, New Booking, Cancelled, Revenue Totals, Invoicing) backed by **Supabase** at `/admin-dashboard`.
+- **Viator Email Sync Worker**: Continuous IMAP synchronization with `alisoban1990@gmail.com` parsing live Viator bookings.
+- **Invoice Generator**: Automated invoice generation and printing backed by Supabase at `/invoice/[invoiceId]`.
 
 ## Quick Start
 
@@ -21,7 +19,7 @@ npm install
 ```bash
 npm run dev
 ```
-The admin app will be running at `http://localhost:3001` (or `http://localhost:3000`).
+The admin app is accessible at `http://localhost:3001` (or `http://localhost:3000`).
 
 ### 3. Build for Production
 ```bash

@@ -14,6 +14,6 @@ export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
     autoRefreshToken: false,
   },
   realtime: {
-    transport: typeof window === 'undefined' ? ws : undefined,
+    transport: (typeof window === 'undefined' ? ws : undefined) as any,
   },
 });

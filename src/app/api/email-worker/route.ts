@@ -1,34 +1,27 @@
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { fetchNewBookings, fetchCancellations } from '../../../../viator-email-agent';
-import { getDb } from '@/lib/firebase-server';
-import { doc, getDoc, setDoc } from 'firebase/firestore/lite';
 
 const POLL_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
+let lastRunTime = 0;
 
 async function runImport() {
-  const db = getDb();
-  // Rate-limit: check when we last ran
-  const stateRef = doc(db, '_system', 'email-worker');
-  try {
-    const snap = await getDoc(stateRef);
-    const lastRun: number = snap.exists() ? (snap.data()?.lastRunAt?.toMillis?.() ?? 0) : 0;
-    const now = Date.now();
-
-    // Skip if we ran less than 90 seconds ago
-    if (now - lastRun < 90 * 1000) {
-      console.log('Email worker: skipping, ran recently');
-      return;
-    }
-
-    await setDoc(stateRef, { lastRunAt: new Date() }, { merge: true });
-  } catch (err) {
-    console.warn('Email worker state check note:', err);
+  const now = Date.now();
+  // Skip if we ran less than 90 seconds ago
+  if (now - lastRunTime < 90 * 1000) {
+    console.log('Email worker: skipping, ran recently');
+    return;
   }
-  await fetchNewBookings();
-  await fetchCancellations();
-  console.log('Email worker: import complete');
+  lastRunTime = now;
+
+  try {
+    await fetchNewBookings();
+    await fetchCancellations();
+    console.log('Email worker: import complete');
+  } catch (err) {
+    console.error('Email worker run error:', err);
+  }
 }
 
 export async function GET() {

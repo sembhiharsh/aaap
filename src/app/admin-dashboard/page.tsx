@@ -10,12 +10,12 @@ import {
   CheckCheck, XCircle, Loader2, Copy, MessageCircle, ExternalLink, ArrowRight, Bell, Calendar, ArrowLeft, Globe, Car, AlertTriangle, Trash2, ChevronDown, ChevronUp
 } from "lucide-react";
 
-import { db, auth } from "@/lib/firebase";
-import { signInAnonymously, onAuthStateChanged, setPersistence, browserLocalPersistence, signOut } from "firebase/auth";
 import {
+  db, auth,
+  signInAnonymously, onAuthStateChanged, setPersistence, browserLocalPersistence, signOut,
   collection, getDocs, doc, setDoc, updateDoc,
   query, orderBy, Timestamp, runTransaction, where, onSnapshot
-} from "firebase/firestore";
+} from "@/lib/supabase-client";
 import {
   normalizeTime,
   formatTimeDisplay,
@@ -83,22 +83,18 @@ const STATUS_CONFIG: Record<BookingStatus, { bg: string; text: string; dot: stri
 const getStatusConfig = (status: string) => STATUS_CONFIG[normalizeStatus(status)] || { bg: "bg-gray-100", text: "text-gray-600", dot: "bg-gray-400" };
 
 const BOTTOM_NAV = [
-  { id: "reservations", label: "My Reservations", icon: Calendar },
-  { id: "website", label: "Website Bookings", icon: Globe },
-  { id: "new", label: "New Reservation", icon: PlusCircle },
+  { id: "reservations", label: "Viator Bookings", icon: Calendar },
+  { id: "new", label: "New Booking", icon: PlusCircle },
   { id: "cancelled", label: "Cancelled", icon: XCircle },
   { id: "totals", label: "Total", icon: DollarSign },
-  { id: "drivers", label: "Drivers", icon: Car },
   { id: "invoice", label: "Generate Invoice", icon: FileText },
 ] as const;
 
 const SIDEBAR_NAV = [
-  { id: "reservations", label: "My Reservations", icon: LayoutDashboard },
-  { id: "website", label: "Website Bookings", icon: Globe },
+  { id: "reservations", label: "Viator Bookings", icon: LayoutDashboard },
   { id: "new", label: "New Reservation", icon: PlusCircle },
   { id: "cancelled", label: "Cancelled Bookings", icon: XCircle },
-  { id: "totals", label: "Total", icon: DollarSign },
-  { id: "drivers", label: "Drivers", icon: Car },
+  { id: "totals", label: "Total Revenue", icon: DollarSign },
   { id: "invoice", label: "Generate Invoice", icon: FileText },
 ] as const;
 
@@ -783,7 +779,7 @@ export default function AdminDashboard() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) setAuthed(true);
       setIsAuthLoading(false);
-    }, (error) => {
+    }, (error: any) => {
       console.error("Auth state change error:", error);
       setIsAuthLoading(false);
     });
@@ -792,7 +788,7 @@ export default function AdminDashboard() {
       setAuthed(true);
     }
 
-    // Safety fallback: if Firebase hangs, hide loader after 2s
+    // Safety fallback: hide loader after 2s
     const fallbackTimer = setTimeout(() => setIsAuthLoading(false), 2000);
 
     return () => {
@@ -897,65 +893,16 @@ export default function AdminDashboard() {
     };
   }, [authed, playBeep]);
 
-  const [loginMode, setLoginMode] = useState<"admin" | "driver">("admin");
-  const [driverIdInput, setDriverIdInput] = useState("");
-  const [pinInput, setPinInput] = useState("");
   const [loginError, setLoginError] = useState("");
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError("");
 
-    if (loginMode === "driver") {
-      const trimmedId = driverIdInput.trim().toUpperCase();
-      const trimmedPin = pinInput.trim();
-
-      if (trimmedId === "ADMIN" && trimmedPin === "ADMIN123") {
-        if (typeof window !== "undefined") {
-          localStorage.setItem("easyride_driver_token", "authenticated");
-        }
-        window.location.href = "/driver-dashboard";
-        return;
-      }
-
-      try {
-        const q = query(collection(db, "drivers"), where("driverId", "==", trimmedId));
-        const snap = await getDocs(q);
-        if (snap.empty) {
-          setLoginError("Invalid Driver ID or PIN");
-          return;
-        }
-        const driverDoc = snap.docs[0];
-        const driverData = { id: driverDoc.id, ...driverDoc.data() } as Driver;
-        if (driverData.status === "Disabled" || driverData.status === "Deleted") {
-          setLoginError("Driver account is disabled or deleted");
-          return;
-        }
-        if (driverData.pin !== trimmedPin) {
-          setLoginError("Invalid Driver ID or PIN");
-          return;
-        }
-        if (typeof window !== "undefined") {
-          localStorage.setItem("easyride_driver_token", "authenticated");
-          localStorage.setItem("easyride_driver_info", JSON.stringify(driverData));
-        }
-        window.location.href = "/driver-dashboard";
-      } catch (err: any) {
-        console.error("Login error:", err);
-        setLoginError(err.message || "Failed to log in.");
-      }
-      return;
-    }
-
-    if (password === "admin123" || password === "taxisbarcelona24") {
-      try {
-        await setPersistence(auth, browserLocalPersistence);
-        await signInAnonymously(auth);
-      } catch (e) {
-        setAuthed(true);
-        if (typeof window !== "undefined") {
-          localStorage.setItem("easyride_admin_token", "authenticated");
-        }
+    if (password === "admin123" || password === "taxisbarcelona24" || password === "admin") {
+      setAuthed(true);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("easyride_admin_token", "authenticated");
       }
     } else {
       setLoginError("Invalid Admin Password");
@@ -986,12 +933,12 @@ export default function AdminDashboard() {
     return (
       <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center p-4 font-sans">
         <form onSubmit={handleLogin} className="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 max-w-sm w-full">
-          <img src="/ADMIN FAVICON AND APP LOGO.png?v=2" alt="BarcelonasTaxis Logo" className="h-20 object-contain mx-auto mb-4" />
+          <img src="/ADMIN FAVICON AND APP LOGO.png?v=2" alt="Admin Logo" className="h-20 object-contain mx-auto mb-4" />
           <h1 className="text-2xl font-black text-center text-gray-900 mb-1">
-            BarcelonasTaxis Portal
+            Viator Admin Portal
           </h1>
           <p className="text-center text-[#6B7280] text-xs mb-6 font-medium">
-            {loginMode === "driver" ? "Enter Driver ID & 4-Digit PIN to access" : "Enter Admin Password to access"}
+            Enter Admin Password to access
           </p>
 
           {loginError && (
@@ -1000,54 +947,23 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {loginMode === "driver" ? (
-            <div className="space-y-4 mb-6">
-              <div>
-                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">Driver ID</label>
-                <input
-                  type="text"
-                  placeholder="e.g. d1DRV001"
-                  className="w-full px-4 py-3 bg-[#F8F9FA] border border-gray-200 rounded-xl text-[15px] font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8B4513]/20 focus:border-[#8B4513] transition-all uppercase"
-                  value={driverIdInput}
-                  onChange={e => setDriverIdInput(e.target.value.toUpperCase())}
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">4-Digit PIN</label>
-                <input
-                  type="password"
-                  placeholder="****"
-                  maxLength={4}
-                  pattern="\d{4}"
-                  className="w-full px-4 py-3 bg-[#F8F9FA] border border-gray-200 rounded-xl text-[15px] font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8B4513]/20 focus:border-[#8B4513] transition-all tracking-[0.4em]"
-                  value={pinInput}
-                  onChange={e => setPinInput(e.target.value)}
-                  required
-                />
-              </div>
+          <div className="space-y-4 mb-6">
+            <div>
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">Admin Password</label>
+              <input
+                type="password"
+                placeholder="Password"
+                className="w-full px-4 py-3 bg-[#F8F9FA] border border-gray-200 rounded-xl text-[15px] font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8B4513]/20 focus:border-[#8B4513] transition-all"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                required
+              />
             </div>
-          ) : (
-            <div className="space-y-4 mb-6">
-              <div>
-                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">Admin Password</label>
-                <input
-                  type="password"
-                  placeholder="Password"
-                  className="w-full px-4 py-3 bg-[#F8F9FA] border border-gray-200 rounded-xl text-[15px] font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8B4513]/20 focus:border-[#8B4513] transition-all"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  required
-                />
-              </div>
-            </div>
-          )}
+          </div>
 
           <button type="submit" className="w-full py-3.5 bg-[#8B4513] text-white rounded-xl font-bold text-[15px] hover:bg-[#8B4513]/90 transition-colors shadow-sm">
-            {loginMode === "driver" ? "Driver Login" : "Access Dashboard"}
+            Access Admin Dashboard
           </button>
-
-          
         </form>
       </div>
     );
@@ -1120,7 +1036,7 @@ export default function AdminDashboard() {
       {/* ── Desktop Sidebar (locked, non-scrolling) ── */}
       <aside className="hidden md:flex w-64 h-screen max-h-screen bg-white border-r border-gray-100 flex-col shrink-0 shadow-sm z-10 print:hidden sticky top-0 left-0">
         <div className="flex items-center justify-center gap-3 px-6 py-3 border-b border-gray-100">
-          <img src="/ADMIN FAVICON AND APP LOGO.png?v=2" alt="BarcelonasTaxis Logo" className="h-20 object-contain w-full" />
+          <img src="/ADMIN FAVICON AND APP LOGO.png?v=2" alt="Admin Logo" className="h-20 object-contain w-full" />
         </div>
         <nav className="flex-1 px-4 py-6 space-y-1.5 overflow-y-auto">
           {SIDEBAR_NAV.map(item => {
@@ -1151,7 +1067,7 @@ export default function AdminDashboard() {
 
       <div className="md:hidden flex items-center justify-between bg-white px-4 py-1.5 shrink-0 z-40 sticky top-0 border-b border-gray-100 shadow-sm print:hidden">
         <div className="flex items-center gap-2.5">
-          <img src="/ADMIN FAVICON AND APP LOGO.png?v=2" alt="BarcelonasTaxis Logo" className="h-[55px] object-contain" />
+          <img src="/ADMIN FAVICON AND APP LOGO.png?v=2" alt="Admin Logo" className="h-[55px] object-contain" />
         </div>
         <div className="flex items-center gap-4">
 
@@ -1171,7 +1087,7 @@ export default function AdminDashboard() {
           <div className="p-4 m-4 bg-red-50 border-l-4 border-red-500 text-red-700">
             <h3 className="font-bold">Error Fetching Data</h3>
             <p>{fetchError}</p>
-            <p className="text-sm mt-2 opacity-80">This typically happens if Firebase environment variables are missing on the production deployment. Check Render environment variables for NEXT_PUBLIC_FIREBASE_PROJECT_ID.</p>
+            <p className="text-sm mt-2 opacity-80">This typically happens if Supabase environment variables are missing on the production deployment. Check environment variables for NEXT_PUBLIC_SUPABASE_URL.</p>
           </div>
         )}
         {renderSection()}
@@ -1531,7 +1447,7 @@ function ReservationsSection({ bookings, loading, onRefresh, setBookings, defaul
                 <button
                   onClick={async () => {
                     try {
-                      const { serverTimestamp } = await import('firebase/firestore');
+                      const { serverTimestamp } = await import('@/lib/supabase-client');
                       await updateDoc(doc(db, "bookings", mobileDeleteConfirm.id), {
                         status: "DELETED",
                         deletedAt: serverTimestamp(),
@@ -1844,7 +1760,7 @@ function BookingDetailModal({ booking, onClose, drivers, updateStatus }: { booki
   const handleSoftDelete = async () => {
     setIsDeleting(true);
     try {
-      const { serverTimestamp } = await import('firebase/firestore');
+      const { serverTimestamp } = await import('@/lib/supabase-client');
       await updateDoc(doc(db, "bookings", booking.id), {
         status: "DELETED",
         deletedAt: serverTimestamp(),
@@ -1863,7 +1779,7 @@ function BookingDetailModal({ booking, onClose, drivers, updateStatus }: { booki
   const handlePermanentDelete = async () => {
     setIsDeleting(true);
     try {
-      const { deleteDoc } = await import('firebase/firestore');
+      const { deleteDoc } = await import('@/lib/supabase-client');
       await deleteDoc(doc(db, "bookings", booking.id));
       setIsDeleteConfirmOpen(false);
       onClose();
@@ -3328,9 +3244,9 @@ function GenerateInvoiceSection({ bookings, db }: { bookings: Booking[]; db: any
   const [invoiceLang, setInvoiceLang] = useState<"en" | "es" | "ca">("en");
 
   const invT = {
-    en: { invoice: "INVOICE", date: "Date:", billTo: "Bill To", bookingRef: "Booking Reference", desc: "Description", amount: "Amount", transfer: "Private Transfer", total: "Total", thanks: "Thank you for choosing BarcelonasTaxis — Barcelona Airport Transfers", pickup: "Pickup Location", dropoff: "Drop-off Location", at: "at", notSpecified: "Not Specified" },
-    es: { invoice: "FACTURA", date: "Fecha:", billTo: "Facturar a", bookingRef: "Referencia de Reserva", desc: "Descripción", amount: "Importe", transfer: "Traslado Privado", total: "Total", thanks: "Gracias por elegir BarcelonasTaxis — Traslados del Aeropuerto de Barcelona", pickup: "Punto de Recogida", dropoff: "Destino", at: "a las", notSpecified: "No Especificado" },
-    ca: { invoice: "FACTURA", date: "Data:", billTo: "Facturar a", bookingRef: "Referència de Reserva", desc: "Descripció", amount: "Import", transfer: "Trasllat Privat", total: "Total", thanks: "Gràcies per triar BarcelonasTaxis — Trasllats de l'Aeroport de Barcelona", pickup: "Punt de Recollida", dropoff: "Destinació", at: "a les", notSpecified: "No Especificat" }
+    en: { invoice: "INVOICE", date: "Date:", billTo: "Bill To", bookingRef: "Booking Reference", desc: "Description", amount: "Amount", transfer: "Private Transfer", total: "Total", thanks: "Thank you for choosing Viator Booking Dispatch", pickup: "Pickup Location", dropoff: "Drop-off Location", at: "at", notSpecified: "Not Specified" },
+    es: { invoice: "FACTURA", date: "Fecha:", billTo: "Facturar a", bookingRef: "Referencia de Reserva", desc: "Descripción", amount: "Importe", transfer: "Traslado Privado", total: "Total", thanks: "Gracias por elegir Viator Booking Dispatch", pickup: "Punto de Recogida", dropoff: "Destino", at: "a las", notSpecified: "No Especificado" },
+    ca: { invoice: "FACTURA", date: "Data:", billTo: "Facturar a", bookingRef: "Referència de Reserva", desc: "Descripció", amount: "Import", transfer: "Trasllat Privat", total: "Total", thanks: "Gràcies per triar Viator Booking Dispatch", pickup: "Punt de Recollida", dropoff: "Destinació", at: "a les", notSpecified: "No Especificat" }
   };
 
   const cleanAddress = (address: any) => {
@@ -3476,7 +3392,7 @@ function GenerateInvoiceSection({ bookings, db }: { bookings: Booking[]; db: any
                 <button onClick={() => setInvoiceLang("ca")} className={`px-4 py-2 rounded-md text-sm font-bold transition-colors ${invoiceLang === "ca" ? "bg-white shadow-sm text-[#8B4513]" : "text-gray-500 hover:text-gray-700"}`}>CA</button>
               </div>
               {booking?.phone && (
-                <a href={`https://wa.me/${booking.phone.replace(/[^0-9+]/g, '')}?text=Hello ${normalizeCustomerName(booking.customerName)}, here is your invoice for booking ${booking.bookingId}: https://barcelonastaxis.com/invoice/${invoiceNum}`} target="_blank" rel="noopener noreferrer" className="py-3 px-6 bg-green-500 text-white rounded-lg font-bold text-[15px] flex items-center justify-center gap-2 hover:bg-green-600 transition-colors shadow-sm">
+                <a href={`https://wa.me/${booking.phone.replace(/[^0-9+]/g, '')}?text=Hello ${normalizeCustomerName(booking.customerName)}, here is your invoice for booking ${booking.bookingId}: ${typeof window !== 'undefined' ? window.location.origin : ''}/invoice/${invoiceNum}`} target="_blank" rel="noopener noreferrer" className="py-3 px-6 bg-green-500 text-white rounded-lg font-bold text-[15px] flex items-center justify-center gap-2 hover:bg-green-600 transition-colors shadow-sm">
                   Send via WhatsApp
                 </a>
               )}
@@ -3489,9 +3405,9 @@ function GenerateInvoiceSection({ bookings, db }: { bookings: Booking[]; db: any
         <div id="invoice-preview" className="bg-white rounded-xl border border-gray-200 p-8 md:p-12 print:shadow-none print:border-0 print:p-0">
           <div className="flex justify-between mb-10">
             <div>
-              <img src="/ADMIN FAVICON AND APP LOGO.png?v=2" alt="BarcelonasTaxis Logo" className="h-14 object-contain mix-blend-multiply border-none shadow-none bg-transparent -ml-2 mb-1" />
-              <div className="text-gray-500 font-medium text-[15px] mt-1">Carretera de Mataró, 111, 08930 Sant Adrià de Besòs, Barcelona, Spain</div>
-              <div className="text-gray-500 font-medium text-[14px] mt-0.5">Email: info@barcelonastaxis.com | Tel: +34 692 84 05 76</div>
+              <img src="/ADMIN FAVICON AND APP LOGO.png?v=2" alt="Admin Logo" className="h-14 object-contain mix-blend-multiply border-none shadow-none bg-transparent -ml-2 mb-1" />
+              <div className="font-bold text-gray-900 text-lg">Viator Bookings Dispatch</div>
+              <div className="text-gray-500 font-medium text-[14px] mt-0.5">Email: alisoban1990@gmail.com</div>
             </div>
             <div className="text-right">
               <div className="text-3xl font-black text-[#8B4513] tracking-tight">{invT[invoiceLang].invoice}</div>

@@ -3,9 +3,6 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, ShieldCheck, KeyRound, AlertCircle, ArrowRight } from "lucide-react";
-import { auth } from "@/lib/firebase";
-import { signInAnonymously, setPersistence, browserLocalPersistence } from "firebase/auth";
-
 export default function AdminPortalPage() {
   const router = useRouter();
   const [adminPassword, setAdminPassword] = useState("");
@@ -30,12 +27,6 @@ export default function AdminPortalPage() {
     setLoading(true);
 
     if (adminPassword === "admin123" || adminPassword === "taxisbarcelona24" || adminPassword === "admin") {
-      try {
-        await setPersistence(auth, browserLocalPersistence);
-        await signInAnonymously(auth);
-      } catch (err) {
-        console.warn("Firebase auth warning:", err);
-      }
       if (typeof window !== "undefined") {
         localStorage.setItem("easyride_admin_token", "authenticated");
       }

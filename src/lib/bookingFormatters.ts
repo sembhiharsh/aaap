@@ -1,6 +1,6 @@
 /**
  * Centralized Booking Data Formatters & Normalizers
- * BarcelonasTaxis Admin & Email Integration
+ * Viator Admin & Email Integration
  */
 
 export type Locale = "en" | "es" | "ca";

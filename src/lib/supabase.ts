@@ -14,7 +14,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: true,
   },
   realtime: {
-    transport: typeof window === 'undefined' ? ws : undefined,
+    transport: (typeof window === 'undefined' ? ws : undefined) as any,
     params: {
       eventsPerSecond: 10,
     },

@@ -1,7 +1,7 @@
 import { supabase } from './supabase';
 import { toCamelBooking, toSnakeBooking, toCamelDriver, toSnakeDriver } from './db';
 
-// Supabase-backed compatibility layer for Admin Dashboard
+// Supabase-backed Auth and Store layer for Viator Admin Dashboard
 export const auth: any = {
   currentUser: { uid: 'admin-master', email: 'alisoban1990@gmail.com' }
 };
@@ -38,8 +38,17 @@ export interface CollectionRef {
 
 export const db: any = supabase;
 
-export function doc(_db: any, table: string, id: string): DocRef {
-  return { table, id };
+export function doc(first: any, second?: string, third?: string): DocRef {
+  if (third) {
+    return { table: second!, id: third };
+  }
+  if (first && typeof first === 'object' && first.table) {
+    return { table: first.table, id: second || `id_${Date.now()}_${Math.random().toString(36).slice(2, 7)}` };
+  }
+  if (typeof first === 'string' && second) {
+    return { table: first, id: second };
+  }
+  return { table: second || 'bookings', id: `id_${Date.now()}_${Math.random().toString(36).slice(2, 7)}` };
 }
 
 export function collection(_db: any, table: string): CollectionRef {
@@ -62,6 +71,25 @@ export const Timestamp = {
   now: () => ({ seconds: Math.floor(Date.now() / 1000) }),
   fromDate: (d: Date) => ({ seconds: Math.floor(d.getTime() / 1000) }),
 };
+
+export function serverTimestamp() {
+  return new Date().toISOString();
+}
+
+export async function deleteDoc(docRef: DocRef) {
+  const table = docRef.table;
+  if (table === 'bookings') {
+    const { error } = await supabase
+      .from('bookings')
+      .delete()
+      .or(`id.eq.${docRef.id},booking_id.eq.${docRef.id}`);
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await supabase.from(table).delete().eq('id', docRef.id);
+    if (error) throw new Error(error.message);
+  }
+  return true;
+}
 
 export async function setDoc(docRef: DocRef, data: any, options?: { merge?: boolean }) {
   const table = docRef.table;
@@ -162,22 +190,24 @@ export function onSnapshot(
 
       next({
         docs,
-        docChanges: () => []
+        docChanges: () => [],
       });
-    } catch (err: any) {
-      if (errorCb) errorCb(err);
+    } catch (e) {
+      if (errorCb) errorCb(e);
     }
   };
 
-  // Initial load
   loadData(true);
 
-  // Realtime subscription via Supabase Channel
   const channel = supabase
-    .channel(`realtime:${table}`)
-    .on('postgres_changes', { event: '*', schema: 'public', table }, () => {
-      loadData(false);
-    })
+    .channel(`realtime_${table}_${Date.now()}`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table },
+      () => {
+        loadData();
+      }
+    )
     .subscribe();
 
   return () => {
@@ -186,4 +216,28 @@ export function onSnapshot(
   };
 }
 
-export default supabase;
+export async function runTransaction(
+  _db: any,
+  updateFunction: (transaction: {
+    get: (ref: DocRef) => Promise<any>;
+    set: (ref: DocRef, data: any) => void;
+    update: (ref: DocRef, data: any) => void;
+  }) => Promise<any>
+) {
+  const tx = {
+    get: async (ref: DocRef) => {
+      const { data } = await supabase.from(ref.table).select('*').eq('id', ref.id).single();
+      return {
+        exists: !!data,
+        data: () => data,
+      };
+    },
+    set: async (ref: DocRef, data: any) => {
+      await supabase.from(ref.table).upsert({ id: ref.id, ...data });
+    },
+    update: async (ref: DocRef, data: any) => {
+      await supabase.from(ref.table).update(data).eq('id', ref.id);
+    },
+  };
+  return await updateFunction(tx);
+}

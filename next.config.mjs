@@ -3,8 +3,8 @@ const nextConfig = {
   poweredByHeader: false,
   async headers() {
     const isDev = process.env.NODE_ENV !== 'production';
-    const scriptSrc = `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://js.stripe.com https://maps.googleapis.com https://www.googletagmanager.com`;
-    const cspHeader = `default-src 'self' https://*.firebaseapp.com https://*.googleapis.com wss://*.googleapis.com wss://*.firebaseio.com; ${scriptSrc}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.googleapis.com https://maps.gstatic.com https://www.google-analytics.com https://www.googletagmanager.com; frame-src https://js.stripe.com; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.googleapis.com wss://*.firebaseio.com https://nominatim.openstreetmap.org https://api.stripe.com https://www.google-analytics.com https://analytics.google.com https://stats.g.doubleclick.net;`;
+    const scriptSrc = `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`;
+    const cspHeader = `default-src 'self' https://*.supabase.co wss://*.supabase.co; ${scriptSrc}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co;`;
 
     const headersList = [
       {
@@ -51,17 +51,8 @@ const nextConfig = {
 
     return headersList;
   },
-  async redirects() {
-    return [
-      {
-        source: '/contact',
-        destination: '/#contact',
-        permanent: true,
-      },
-    ];
-  },
   images: {
-    unoptimized: true, // Prevent OOM crashes on Render free tier
+    unoptimized: true,
   },
 };
 

@@ -1,8 +1,7 @@
 export const dynamic = 'force-dynamic';
 // src/app/api/invoices/route.ts
 import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/firebase-server';
-import { collection, getDocs, query, limit } from 'firebase/firestore/lite';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import { createAndSendInvoice, generateInvoiceId } from '@/lib/invoices';
 
 export async function POST(request: Request) {
@@ -17,7 +16,6 @@ export async function POST(request: Request) {
     const invoiceId = await generateInvoiceId();
 
     console.log(`[Invoice API] Triggering async creation in the background for ${invoiceId}...`);
-    // Run the heavy database writing and email dispatch asynchronously in the background
     createAndSendInvoice({
       bookingId,
       amount,
@@ -40,13 +38,17 @@ export async function POST(request: Request) {
 
 export async function GET() {
   try {
-    console.log('[Invoice API] Fetching recent invoices...');
-    const q = query(collection(getDb(), 'invoices'), limit(50));
-    const invoicesSnap = await getDocs(q);
+    console.log('[Invoice API] Fetching recent invoices from Supabase...');
+    const { data: invoices, error } = await supabaseAdmin
+      .from('invoices')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50);
     
-    const invoices = invoicesSnap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-    console.log(`[Invoice API] Fetched ${invoices.length} invoices successfully.`);
-    return NextResponse.json(invoices);
+    if (error) {
+      throw new Error(error.message);
+    }
+    return NextResponse.json(invoices || []);
   } catch (e: any) {
     console.error('[Invoice API] Fetch error:', e);
     return NextResponse.json({ error: e.message || 'Failed to fetch invoices' }, { status: 500 });
